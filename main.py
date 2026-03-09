@@ -84,7 +84,6 @@ def send_telegram_with_buttons(video_id, title, channel_name, published):
     keyboard = {
         "inline_keyboard": [
             [
-                {"text": "⬇️ Video Download", "callback_data": f"dl_video_{video_id}"},
                 {"text": "🖼️ Thumbnail", "callback_data": f"dl_thumb_{video_id}"}
             ]
         ]
@@ -99,36 +98,33 @@ def send_telegram_with_buttons(video_id, title, channel_name, published):
     print(f"✅ Notification sent: {title}")
 
 def download_and_send_video(video_id, chat_id):
-    import yt_dlp
+    from pytubefix import YouTube
+    from pytubefix.cli import on_progress
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     send_status(chat_id, "⏳ Video download ho raha hai... thoda wait karo!")
 
     try:
-        ydl_opts = {
-            'format': '18/17/22/36/best[ext=mp4]/best',
-            'outtmpl': f'/tmp/{video_id}.%(ext)s',
-            'quiet': False,
-            'noplaylist': True,
-            'cookiefile': COOKIES_FILE,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['web', 'tv_embedded'],
-                }
-            },
-        }
+        yt = YouTube(video_url, on_progress_callback=on_progress, use_oauth=False, allow_oauth_cache=False)
+        title = yt.title
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            filename = ydl.prepare_filename(info)
-            title = info.get('title', 'Video')
+        # Get best MP4 stream under 50MB
+        stream = yt.streams.filter(progressive=True, file_extension="mp4").order_by("resolution").last()
+        if not stream:
+            stream = yt.streams.filter(file_extension="mp4").order_by("resolution").first()
+
+        if not stream:
+            send_status(chat_id, "❌ Koi downloadable format nahi mila!")
+            return
+
+        filename = stream.download(output_path="/tmp", filename=f"{video_id}.mp4")
 
         file_size = os.path.getsize(filename)
         if file_size > 50 * 1024 * 1024:
-            send_status(chat_id, "❌ Video bahut badi hai (50MB se zyada)! YouTube link se download karo.")
+            send_status(chat_id, "❌ Video bahut badi hai (50MB se zyada)!")
             os.remove(filename)
             return
 
-        with open(filename, 'rb') as f:
+        with open(filename, "rb") as f:
             requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo",
                 data={"chat_id": chat_id, "caption": f"🎬 {title}"},

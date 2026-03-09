@@ -10,6 +10,8 @@ app = Flask(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+FRIEND_CHAT_ID = "1420941229"
+ALL_CHAT_IDS = [TELEGRAM_CHAT_ID, FRIEND_CHAT_ID]
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "mysecret123")
 RENDER_URL = "https://youtube-realtime-monitor.onrender.com"
 COOKIES_FILE = "/opt/render/project/src/cookies.txt"
@@ -89,13 +91,15 @@ def send_telegram_with_buttons(video_id, title, channel_name, published):
         ]
     }
 
-    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown",
-        "reply_markup": keyboard
-    })
-    print(f"✅ Notification sent: {title}")
+    for cid in ALL_CHAT_IDS:
+        if cid:
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+                "chat_id": cid,
+                "text": message,
+                "parse_mode": "Markdown",
+                "reply_markup": keyboard
+            })
+    print(f"✅ Notification sent to all: {title}")
 
 def download_and_send_video(video_id, chat_id):
     from pytubefix import YouTube

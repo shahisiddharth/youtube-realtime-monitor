@@ -112,8 +112,7 @@ def download_and_send_video(video_id, chat_id):
             'cookiefile': COOKIES_FILE,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android'],
-                    'player_skip': ['webpage', 'configs'],
+                    'player_client': ['web', 'tv_embedded'],
                 }
             },
         }

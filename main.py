@@ -105,10 +105,13 @@ def download_and_send_video(video_id, chat_id):
 
     try:
         ydl_opts = {
-            'format': 'best[filesize<45M]/best[height<=480]/best',
+            'format': 'best[ext=mp4][filesize<45M]/best[ext=mp4][height<=480]/best[ext=mp4]/best',
             'outtmpl': f'/tmp/{video_id}.%(ext)s',
             'quiet': True,
             'cookiefile': COOKIES_FILE,
+            'merge_output_format': 'mp4',
+            'prefer_free_formats': False,
+            'noplaylist': True,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -259,4 +262,3 @@ resub_thread.start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-    

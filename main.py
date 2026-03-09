@@ -3,6 +3,7 @@ import requests
 import xml.etree.ElementTree as ET
 import threading
 import time
+import yt_dlp
 from flask import Flask, request, Response
 from datetime import datetime, timedelta
 
@@ -22,6 +23,9 @@ CHANNELS_TO_MONITOR = [
 
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
+# ============================================================
+# AUTO PING & RESUBSCRIBE
+# ============================================================
 def keep_alive():
     while True:
         time.sleep(14 * 60)
@@ -40,6 +44,9 @@ def auto_resubscribe():
         except Exception as e:
             print(f"Resubscribe error: {e}")
 
+# ============================================================
+# YOUTUBE SUBSCRIBE
+# ============================================================
 def subscribe_to_channel(channel_id, callback_url):
     hub_url = "https://pubsubhubbub.appspot.com/subscribe"
     topic_url = f"https://www.youtube.com/xml/feeds/videos.xml?channel_id={channel_id}"
@@ -61,7 +68,10 @@ def subscribe_all(callback_url):
 def is_relevant(title):
     return any(k.lower() in title.lower() for k in KEYWORDS)
 
-def send_telegram(video_id, title, channel_name, published):
+# ============================================================
+# TELEGRAM - Notification with Buttons
+# ============================================================
+def send_telegram_with_buttons(video_id, title, channel_name, published):
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     try:
         pub_time = datetime.fromisoformat(published.replace('Z', '+00:00'))
@@ -76,17 +86,121 @@ def send_telegram(video_id, title, channel_name, published):
 🎬 *Title:* {title}
 🕐 *Time:* {time_str}
 
-🔗 [Video Link]({video_url})
+🔗 [YouTube Link]({video_url})
 
 ⚡ Jaldi daal apne channel pe!"""
 
-    requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={
+    # Inline buttons - Video Download & Thumbnail
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "⬇️ Video Download",
+                    "callback_data": f"dl_video_{video_id}"
+                },
+                {
+                    "text": "🖼️ Thumbnail",
+                    "callback_data": f"dl_thumb_{video_id}"
+                }
+            ]
+        ]
+    }
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    requests.post(url, json={
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "Markdown"
+        "parse_mode": "Markdown",
+        "reply_markup": keyboard
     })
-    print(f"✅ Notification sent: {title}")
+    print(f"✅ Notification sent with buttons: {title}")
 
+# ============================================================
+# DOWNLOAD VIDEO
+# ============================================================
+def download_and_send_video(video_id, chat_id, message_id):
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+    
+    # Processing message bhejo
+    send_status(chat_id, "⏳ Video download ho raha hai... thoda wait karo!")
+    
+    try:
+        ydl_opts = {
+            'format': 'best[filesize<45M]/best[height<=480]/best',
+            'outtmpl': f'/tmp/{video_id}.%(ext)s',
+            'quiet': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            filename = ydl.prepare_filename(info)
+            title = info.get('title', 'Video')
+        
+        # File size check
+        file_size = os.path.getsize(filename)
+        if file_size > 50 * 1024 * 1024:  # 50MB
+            send_status(chat_id, "❌ Video bahut badi hai (50MB se zyada)! YouTube link se download karo.")
+            os.remove(filename)
+            return
+        
+        # Telegram pe bhejo
+        with open(filename, 'rb') as f:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo",
+                data={"chat_id": chat_id, "caption": f"🎬 {title}"},
+                files={"video": f}
+            )
+        
+        os.remove(filename)
+        print(f"✅ Video sent: {title}")
+        
+    except Exception as e:
+        print(f"Video download error: {e}")
+        send_status(chat_id, f"❌ Video download nahi hua. YouTube se seedha download karo!")
+
+# ============================================================
+# DOWNLOAD THUMBNAIL
+# ============================================================
+def download_and_send_thumbnail(video_id, chat_id):
+    send_status(chat_id, "⏳ Thumbnail download ho raha hai...")
+    
+    try:
+        # YouTube thumbnail URLs (high quality)
+        thumb_urls = [
+            f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
+            f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
+        ]
+        
+        thumb_data = None
+        for thumb_url in thumb_urls:
+            response = requests.get(thumb_url)
+            if response.status_code == 200 and len(response.content) > 5000:
+                thumb_data = response.content
+                break
+        
+        if thumb_data:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+                data={"chat_id": chat_id, "caption": "🖼️ Thumbnail"},
+                files={"photo": ("thumbnail.jpg", thumb_data, "image/jpeg")}
+            )
+            print(f"✅ Thumbnail sent for {video_id}")
+        else:
+            send_status(chat_id, "❌ Thumbnail nahi mila!")
+            
+    except Exception as e:
+        print(f"Thumbnail error: {e}")
+        send_status(chat_id, "❌ Thumbnail download nahi hua!")
+
+def send_status(chat_id, text):
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        json={"chat_id": chat_id, "text": text}
+    )
+
+# ============================================================
+# ROUTES
+# ============================================================
 @app.route("/ping", methods=["GET"])
 def ping():
     return "pong", 200
@@ -116,10 +230,52 @@ def receive_webhook():
             pub = published.text if published is not None else ""
             print(f"New video: {ttl}")
             if is_relevant(ttl):
-                send_telegram(vid, ttl, channel, pub)
+                send_telegram_with_buttons(vid, ttl, channel, pub)
     except Exception as e:
         print(f"Error: {e}")
     return Response("OK", status=200)
+
+# Telegram Bot Callback (button press handle karta hai)
+@app.route("/telegram_callback", methods=["POST"])
+def telegram_callback():
+    data = request.json
+    if not data or "callback_query" not in data:
+        return "OK", 200
+    
+    callback = data["callback_query"]
+    callback_data = callback.get("data", "")
+    chat_id = callback["message"]["chat"]["id"]
+    message_id = callback["message"]["message_id"]
+    
+    # Answer callback (loading indicator hatao)
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery",
+        json={"callback_query_id": callback["id"]}
+    )
+    
+    if callback_data.startswith("dl_video_"):
+        video_id = callback_data.replace("dl_video_", "")
+        # Background mein download karo
+        thread = threading.Thread(target=download_and_send_video, args=(video_id, chat_id, message_id))
+        thread.daemon = True
+        thread.start()
+    
+    elif callback_data.startswith("dl_thumb_"):
+        video_id = callback_data.replace("dl_thumb_", "")
+        thread = threading.Thread(target=download_and_send_thumbnail, args=(video_id, chat_id))
+        thread.daemon = True
+        thread.start()
+    
+    return "OK", 200
+
+@app.route("/set_webhook", methods=["GET"])
+def set_bot_webhook():
+    webhook_url = f"{RENDER_URL}/telegram_callback"
+    response = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook",
+        json={"url": webhook_url}
+    )
+    return f"Bot webhook set: {response.json()}"
 
 @app.route("/subscribe", methods=["GET"])
 def manual_subscribe():
@@ -140,3 +296,4 @@ resub_thread.start()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+    

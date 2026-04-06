@@ -4,14 +4,15 @@ from flask import Flask, request, Response, jsonify
 
 app = Flask(__name__)
 
-# --- CONFIG ---
+# --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ALL_CHAT_IDS = [TELEGRAM_CHAT_ID, "1420941229"]
 RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
-COOKIES_FILE = "cookies.txt" # Make sure this file is in your GitHub repo
+COOKIES_FILE = "cookies.txt" 
+WEBHOOK_SECRET = "mysecret123"
 
-# In-memory storage for Render Free Tier stability
+# In-memory video cache
 VIDEO_LIST = []
 
 CHANNELS_TO_MONITOR = [
@@ -20,15 +21,16 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: Secure Link Extractor (Bypasses YouTube Block) ---
+# --- API: DIRECT LINK EXTRACTOR (PRO VERSION) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
-    # yt-dlp uses your cookies to get the direct MP4 link
+    # yt-dlp configuration with anti-bot headers
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
         'format': 'best[ext=mp4]/best',
         'quiet': True,
         'no_warnings': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -36,9 +38,10 @@ def get_link(v_id):
             info = ydl.extract_info(url, download=False)
             return jsonify({"url": info['url'], "title": info['title']})
     except Exception as e:
+        # Sends the actual YouTube error to the App
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/videos")
+@app.route("/api/videos", methods=["GET"])
 def get_videos():
     return jsonify(VIDEO_LIST)
 
@@ -71,7 +74,7 @@ def manual_subscribe():
         topic = f"https://www.youtube.com/xml/feeds/videos.xml?channel_id={ch}"
         requests.post("https://pubsubhubbub.appspot.com/subscribe", data={
             "hub.callback": f"{RENDER_URL}/webhook", "hub.topic": topic,
-            "hub.verify": "async", "hub.mode": "subscribe", "hub.lease_seconds": 432000
+            "hub.verify": "async", "hub.mode": "subscribe", "hub.lease_seconds": 432000, "hub.secret": WEBHOOK_SECRET
         })
     return "✅ Monitoring Synced!"
 
@@ -81,6 +84,7 @@ def home(): return f"🎬 Hybrid Monitor Live! Cache: {len(VIDEO_LIST)}"
 @app.route("/ping")
 def ping(): return "pong", 200
 
+# Server ko 24/7 jagaye rakhne ke liye
 def keep_alive():
     while True:
         time.sleep(10 * 60)

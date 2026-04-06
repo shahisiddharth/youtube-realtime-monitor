@@ -6,11 +6,12 @@ app = Flask(__name__)
 
 # --- CONFIG ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-ALL_CHAT_IDS = [TELEGRAM_CHAT_ID, "1420941229"]
-WEBHOOK_SECRET = "mysecret123"
-# Is URL ko apni asli Render URL se badal dein agar ye alag hai
+ALL_CHAT_IDS = [os.environ.get("TELEGRAM_CHAT_ID", ""), "1420941229"]
 RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
+
+# --- MEMORY DATABASE (No File needed) ---
+# Ye list videos ko server chalu rehne tak yaad rakhegi
+VIDEO_LIST = [] 
 
 CHANNELS_TO_MONITOR = [
     "UCI0XKEplxvfqgoLht1mtb-A",
@@ -19,70 +20,16 @@ CHANNELS_TO_MONITOR = [
     "UCGbL1HkQsVvQ-aYIRvxp8AQ",
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
-DB_FILE = os.path.join(os.getcwd(), "videos_db.json")
-
-# --- DATABASE LOGIC ---
-def save_video_to_db(video_data):
-    data = []
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, "r") as f:
-                data = json.load(f)
-        except: data = []
-    
-    if not any(v['id'] == video_data['id'] for v in data):
-        data.insert(0, video_data)
-        with open(DB_FILE, "w") as f:
-            json.dump(data[:50], f)
-        print(f"✅ Saved to DB: {video_data['title']}")
-
-# --- KEEP-ALIVE (Server ko jagaye rakhne ke liye) ---
-def keep_alive():
-    while True:
-        # Render Free Tier 15 min mein sota hai, hum 10 min mein ping karenge
-        time.sleep(10 * 60) 
-        try:
-            response = requests.get(f"{RENDER_URL}/ping")
-            print(f"🚀 Self-Ping Success: {response.status_code}")
-        except Exception as e:
-            print(f"❌ Self-Ping Error: {e}")
-
-# --- YOUTUBE SUBSCRIPTION LOGIC ---
-def subscribe_all():
-    hub_url = "https://pubsubhubbub.appspot.com/subscribe"
-    for channel_id in CHANNELS_TO_MONITOR:
-        topic_url = f"https://www.youtube.com/xml/feeds/videos.xml?channel_id={channel_id}"
-        data = {
-            "hub.callback": f"{RENDER_URL}/webhook",
-            "hub.topic": topic_url,
-            "hub.verify": "async",
-            "hub.mode": "subscribe",
-            "hub.secret": WEBHOOK_SECRET,
-            "hub.lease_seconds": 432000,
-        }
-        requests.post(hub_url, data=data)
-    print("✅ Subscribed to all channels")
 
 # --- ROUTES ---
 @app.route("/")
 def home():
-    return "🎬 YouTube Monitor Pro - Status: Active & Awake ✅"
-
-@app.route("/ping")
-def ping():
-    return "pong", 200
+    return f"🎬 Monitor Live! Videos in Cache: {len(VIDEO_LIST)}"
 
 @app.route("/api/videos", methods=["GET"])
 def get_videos():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            return jsonify(json.load(f))
-    return jsonify([])
-
-@app.route("/webhook", methods=["GET"])
-def verify_webhook():
-    challenge = request.args.get("hub.challenge", "")
-    return Response(challenge, status=200)
+    # Direct memory se data bhejega, koi file error nahi aayega
+    return jsonify(VIDEO_LIST)
 
 @app.route("/webhook", methods=["POST"])
 def receive_webhook():
@@ -93,27 +40,47 @@ def receive_webhook():
         if entry is not None:
             v_id = entry.find('yt:videoId', ns).text
             title = entry.find('atom:title', ns).text
+            
             if any(k.lower() in title.lower() for k in KEYWORDS):
                 video_obj = {"id": v_id, "title": title, "time": str(time.time())}
-                save_video_to_db(video_obj)
                 
-                # Telegram Notification
+                # Check for duplicates and add to memory
+                if not any(v['id'] == v_id for v in VIDEO_LIST):
+                    VIDEO_LIST.insert(0, video_obj)
+                    if len(VIDEO_LIST) > 50: VIDEO_LIST.pop() # Top 50 rakhein
+                
+                # Telegram Alert
                 for cid in ALL_CHAT_IDS:
                     requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
                                  json={"chat_id": cid, "text": f"🔔 *Naya Video Aaya!*\n\n🎬 {title}\n\nApp check karein!", "parse_mode": "Markdown"})
-    except Exception as e:
-        print(f"Webhook Error: {e}")
+    except: pass
     return "OK", 200
+
+# --- Baki purane routes (verify_webhook, subscribe, keep_alive) wahi rakhein ---
+@app.route("/webhook", methods=["GET"])
+def verify_webhook():
+    return Response(request.args.get("hub.challenge", ""), status=200)
 
 @app.route("/subscribe")
 def manual_subscribe():
-    subscribe_all()
-    return "✅ Subscription Request Sent! Monitoring started."
+    hub_url = "https://pubsubhubbub.appspot.com/subscribe"
+    for ch in CHANNELS_TO_MONITOR:
+        topic = f"https://www.youtube.com/xml/feeds/videos.xml?channel_id={ch}"
+        requests.post(hub_url, data={
+            "hub.callback": f"{RENDER_URL}/webhook",
+            "hub.topic": topic, "hub.verify": "async", "hub.mode": "subscribe", "hub.lease_seconds": 432000
+        })
+    return "✅ Subscribed!"
 
-# --- START BACKGROUND THREADS ---
-# 1. Keep Alive Thread
+@app.route("/ping")
+def ping(): return "pong", 200
+
+def keep_alive():
+    while True:
+        time.sleep(10 * 60)
+        try: requests.get(f"{RENDER_URL}/ping")
+        except: pass
 threading.Thread(target=keep_alive, daemon=True).start()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

@@ -20,7 +20,7 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: SMART LINK EXTRACTOR (PRO FALLBACK VERSION) ---
+# --- API: FINAL FIX LINK EXTRACTOR (NO FFMPEG NEEDED) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
     if not os.path.exists(COOKIES_FILE):
@@ -31,13 +31,10 @@ def get_link(v_id):
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        # ✅ FIX: Best muxed formats priority (18=360p, 22=720p)
-        'format': '18/22/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        # ✅ FIX: Sirf muxed (single file) format lo, ffmpeg ki zarurat nahi padegi
+        'format': 'best[ext=mp4]/best',
         'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'android', 'web'],
-                'skip': ['hls', 'dash']
-            }
+            'youtube': {'player_client': ['ios', 'android', 'web']}
         },
         'http_headers': {
             'User-Agent': 'com.google.ios.youtube/19.29.1 CFNetwork/1474 Darwin/23.0.0',
@@ -49,24 +46,11 @@ def get_link(v_id):
             url = f"https://www.youtube.com/watch?v={v_id}"
             info = ydl.extract_info(url, download=False)
             
-            # yt-dlp automatically picks the best URL based on 'format' string
-            final_url = info.get('url')
-
-            # Fallback Loop: Agar direct link nahi mila, toh formats scan karein
-            if not final_url:
-                formats = info.get('formats', [])
-                for f in reversed(formats):
-                    # Check for combined video and audio (Muxed)
-                    if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url'):
-                        final_url = f['url']
-                        break
-                
-                # Ultimate Fallback: Just give any working URL
-                if not final_url and formats:
-                    final_url = formats[-1].get('url')
+            # Direct single muxed URL extraction
+            final_url = info.get('url') or info.get('formats', [{}])[-1].get('url')
 
             if not final_url:
-                return jsonify({"error": "No working link found for this video."}), 500
+                return jsonify({"error": "YouTube did not provide a direct link."}), 500
 
             return jsonify({
                 "url": final_url, 
@@ -76,7 +60,7 @@ def get_link(v_id):
     except Exception as e:
         return jsonify({"error": f"Extraction Error: {str(e)}"}), 500
 
-# --- ROUTES ---
+# --- REST OF THE API ---
 @app.route("/api/test_push/<v_id>")
 def test_push(v_id):
     video_obj = {"id": v_id, "title": f"TEST VIDEO: {v_id}"}
@@ -108,7 +92,7 @@ def receive_webhook():
                     if len(VIDEO_LIST) > 50: VIDEO_LIST.pop()
                     for cid in ALL_CHAT_IDS:
                         requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
-                                     json={"chat_id": cid, "text": f"🔔 *Naya Video Aaya!*\n\n🎬 {title}\n\nApp check karein!", "parse_mode": "Markdown"})
+                                     json={"chat_id": cid, "text": f"🔔 *Naya Video Aaya!*\n\n🎬 {title}\n\nApp check karein!"})
     except: pass
     return "OK", 200
 
@@ -125,7 +109,7 @@ def manual_subscribe():
 @app.route("/")
 def home():
     c_status = "Found ✅" if os.path.exists(COOKIES_FILE) else "Missing ❌"
-    return f"🎬 Hybrid Monitor Live! Cache: {len(VIDEO_LIST)} | Cookies: {c_status}"
+    return f"🎬 Monitor Live! Cache: {len(VIDEO_LIST)} | Cookies: {c_status}"
 
 @app.route("/ping")
 def ping(): return "pong", 200

@@ -12,6 +12,7 @@ RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
 COOKIES_FILE = "cookies.txt" 
 WEBHOOK_SECRET = "mysecret123"
 
+# In-memory storage (Fast & Reliable for Free Tier)
 VIDEO_LIST = []
 
 CHANNELS_TO_MONITOR = [
@@ -20,14 +21,13 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: DIRECT LINK EXTRACTOR (MUXED VERSION) ---
+# --- API: DIRECT LINK EXTRACTOR (MUXED - NO FFMPEG NEEDED) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
     if not os.path.exists(COOKIES_FILE):
-        return jsonify({"error": "Cookies file missing!"}), 500
+        return jsonify({"error": "Cookies file missing on GitHub!"}), 500
 
-    # 👇 Ye format YouTube se 720p ya 360p ki WO file nikalega jo pehle se MIX hai
-    # Isse FFmpeg ki zaroorat nahi padegi aur App turant download karegi
+    # Best priority: 720p/360p Muxed (Video+Audio combined)
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
         'format': 'best[ext=mp4]/best', 
@@ -43,19 +43,9 @@ def get_link(v_id):
             url = f"https://www.youtube.com/watch?v={v_id}"
             info = ydl.extract_info(url, download=False)
             
-            # YouTube direct URL dhoondhte hain
             video_url = info.get('url')
-            
+            # Fallback if URL not found in main info
             if not video_url:
-                # Agar main info mein nahi mila, toh formats ki list check karte hain
-                for f in info.get('formats', []):
-                    # Format 22 = 720p Muxed, Format 18 = 360p Muxed
-                    if f.get('format_id') == '22' or f.get('format_id') == '18':
-                        video_url = f.get('url')
-                        break
-            
-            if not video_url:
-                # Still not found? Take the first available format
                 video_url = info['formats'][0]['url']
 
             return jsonify({
@@ -66,7 +56,16 @@ def get_link(v_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- ROUTES ---
+# --- SECRET TESTING ROUTE (Bina upload kiye test karein) ---
+@app.route("/api/test_push/<v_id>")
+def test_push(v_id):
+    video_obj = {"id": v_id, "title": f"TEST VIDEO: {v_id}"}
+    if not any(v['id'] == v_id for v in VIDEO_LIST):
+        VIDEO_LIST.insert(0, video_obj)
+        return f"✅ SUCCESS! {v_id} pushed to App. Refresh your Android App now!"
+    return "❌ Video already exists in list."
+
+# --- MAIN ROUTES ---
 @app.route("/api/videos", methods=["GET"])
 def get_videos():
     return jsonify(VIDEO_LIST)

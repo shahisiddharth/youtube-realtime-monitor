@@ -20,24 +20,25 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: ANDROID PLAYER SPOOFER (ULTIMATE BYPASS) ---
+# --- API: THE ULTIMATE BYPASS EXTRACTOR (iOS + ANDROID HYBRID) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
     if not os.path.exists(COOKIES_FILE):
         return jsonify({"error": "Cookies file missing!"}), 500
 
-    # 🛑 FORMAT KO OPTION SE HATAYE (Exception se bachne ke liye)
+    # Best Bypass Options (iOS client is currently the most stable)
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        # 👇 Sabse zaroori: YouTube ko lagna chahiye ki ye Android App hai
-        'extractor_args': {'youtube': {'player_client': ['android']}},
+        # 👇 Is logic se YouTube ko lagega ki request iPhone se aa rahi hai
+        'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
         'http_headers': {
-            'User-Agent': 'com.google.android.youtube/19.10.34 (Linux; U; Android 11; en_US) gzip',
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
         }
     }
+    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             url = f"https://www.youtube.com/watch?v={v_id}"
@@ -46,26 +47,25 @@ def get_link(v_id):
             
             final_url = None
             
-            # Logic: Pehle "Muxed" (Video+Audio) MP4 dhoondho jo Mobile par chalta hai
-            # Format 22 = 720p, Format 18 = 360p
-            target_formats = ['22', '18', '135', '134'] 
-            
-            for f_id in target_formats:
-                for f in formats:
-                    if f.get('format_id') == f_id and f.get('url'):
+            # Priority Search: Pehle best quality muxed dhoondho
+            # iOS client aksar best muxed formats (18, 22) deta hai
+            for f in reversed(formats):
+                # We need both Video and Audio in one file (Muxed)
+                if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url'):
+                    # Prefer MP4 if possible
+                    if f.get('ext') == 'mp4':
                         final_url = f.get('url')
                         break
-                if final_url: break
             
-            # Agar ab bhi nahi mila, toh manually check karein ki kaunsa best hai jisme audio+video ho
+            # Fallback: Agar MP4 nahi mila toh jo bhi best hai
             if not final_url:
                 for f in reversed(formats):
                     if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url'):
                         final_url = f.get('url')
                         break
-            
+
             if not final_url:
-                final_url = formats[0].get('url') # Pehla available link
+                final_url = formats[0].get('url')
 
             return jsonify({
                 "url": final_url, 
@@ -73,9 +73,9 @@ def get_link(v_id):
                 "ext": 'mp4'
             })
     except Exception as e:
-        return jsonify({"error": f"Extraction Error: {str(e)}"}), 500
+        return jsonify({"error": f"YouTube is blocking this IP. Try again in 5 mins. Details: {str(e)}"}), 500
 
-# --- ROUTES ---
+# --- REST OF THE ROUTES ---
 @app.route("/api/test_push/<v_id>")
 def test_push(v_id):
     video_obj = {"id": v_id, "title": f"TEST VIDEO: {v_id}"}

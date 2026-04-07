@@ -12,7 +12,7 @@ RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
 COOKIES_FILE = "cookies.txt" 
 WEBHOOK_SECRET = "mysecret123"
 
-# In-memory video cache
+# In-memory video cache (Fastest for Free Tier)
 VIDEO_LIST = []
 
 CHANNELS_TO_MONITOR = [
@@ -21,16 +21,20 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: DIRECT LINK EXTRACTOR (PRO VERSION) ---
+# --- API: MASTER LINK EXTRACTOR (COOKIE POWERED) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
-    # yt-dlp configuration with anti-bot headers
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
         'format': 'best[ext=mp4]/best',
         'quiet': True,
         'no_warnings': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'nocheckcertificate': True,
+        # Spoofing Android to bypass "Bot" detection
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
+        }
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -38,7 +42,6 @@ def get_link(v_id):
             info = ydl.extract_info(url, download=False)
             return jsonify({"url": info['url'], "title": info['title']})
     except Exception as e:
-        # Sends the actual YouTube error to the App
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/videos", methods=["GET"])
@@ -76,7 +79,7 @@ def manual_subscribe():
             "hub.callback": f"{RENDER_URL}/webhook", "hub.topic": topic,
             "hub.verify": "async", "hub.mode": "subscribe", "hub.lease_seconds": 432000, "hub.secret": WEBHOOK_SECRET
         })
-    return "✅ Monitoring Synced!"
+    return "✅ Subscriptions Synced!"
 
 @app.route("/")
 def home(): return f"🎬 Hybrid Monitor Live! Cache: {len(VIDEO_LIST)}"
@@ -84,7 +87,6 @@ def home(): return f"🎬 Hybrid Monitor Live! Cache: {len(VIDEO_LIST)}"
 @app.route("/ping")
 def ping(): return "pong", 200
 
-# Server ko 24/7 jagaye rakhne ke liye
 def keep_alive():
     while True:
         time.sleep(10 * 60)

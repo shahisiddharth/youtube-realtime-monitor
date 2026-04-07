@@ -12,7 +12,6 @@ RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
 COOKIES_FILE = "cookies.txt" 
 WEBHOOK_SECRET = "mysecret123"
 
-# In-memory storage (Fast & Reliable for Free Tier)
 VIDEO_LIST = []
 
 CHANNELS_TO_MONITOR = [
@@ -21,15 +20,15 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: DIRECT LINK EXTRACTOR (MUXED - NO FFMPEG NEEDED) ---
+# --- API: FAIL-SAFE LINK EXTRACTOR (NO FFMPEG NEEDED) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
     if not os.path.exists(COOKIES_FILE):
         return jsonify({"error": "Cookies file missing on GitHub!"}), 500
 
-    # Best priority: 720p/360p Muxed (Video+Audio combined)
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
+        # Format string jo sirf wahi files dhundhega jo 'ready-to-play' hain
         'format': 'best[ext=mp4]/best', 
         'quiet': True,
         'no_warnings': True,
@@ -43,10 +42,33 @@ def get_link(v_id):
             url = f"https://www.youtube.com/watch?v={v_id}"
             info = ydl.extract_info(url, download=False)
             
-            video_url = info.get('url')
-            # Fallback if URL not found in main info
+            # Logic to find the best MUXED (Video + Audio) format manually
+            formats = info.get('formats', [])
+            video_url = None
+            
+            # 1. Sabse pehle Format 22 (720p MP4 Muxed) dhoondhte hain
+            for f in formats:
+                if f.get('format_id') == '22':
+                    video_url = f.get('url')
+                    break
+            
+            # 2. Agar nahi mila toh Format 18 (360p MP4 Muxed) dhoondhte hain
             if not video_url:
-                video_url = info['formats'][0]['url']
+                for f in formats:
+                    if f.get('format_id') == '18':
+                        video_url = f.get('url')
+                        break
+            
+            # 3. Agar ab bhi nahi mila toh list mein se koi bhi format jisme v+a dono ho
+            if not video_url:
+                for f in reversed(formats): # Reversed taaki best quality mile
+                    if f.get('vcodec') != 'none' and f.get('acodec') != 'none':
+                        video_url = f.get('url')
+                        break
+            
+            # 4. Aakhri raasta: Jo bhi link yt-dlp ne nikala hai
+            if not video_url:
+                video_url = info.get('url') or formats[0]['url']
 
             return jsonify({
                 "url": video_url, 
@@ -54,16 +76,16 @@ def get_link(v_id):
                 "ext": 'mp4'
             })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Extraction Error: {str(e)}"}), 500
 
-# --- SECRET TESTING ROUTE (Bina upload kiye test karein) ---
+# --- SECRET TESTING ROUTE ---
 @app.route("/api/test_push/<v_id>")
 def test_push(v_id):
     video_obj = {"id": v_id, "title": f"TEST VIDEO: {v_id}"}
     if not any(v['id'] == v_id for v in VIDEO_LIST):
         VIDEO_LIST.insert(0, video_obj)
-        return f"✅ SUCCESS! {v_id} pushed to App. Refresh your Android App now!"
-    return "❌ Video already exists in list."
+        return f"✅ SUCCESS! {v_id} pushed. Refresh App!"
+    return "❌ Already in list."
 
 # --- MAIN ROUTES ---
 @app.route("/api/videos", methods=["GET"])

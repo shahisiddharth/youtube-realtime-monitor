@@ -9,10 +9,11 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ALL_CHAT_IDS = [TELEGRAM_CHAT_ID, "1420941229"]
 RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
+# 👇 Iska naam aur GitHub file ka naam bilkul match hona chahiye
 COOKIES_FILE = "cookies.txt" 
 WEBHOOK_SECRET = "mysecret123"
 
-# In-memory video cache (Fastest for Free Tier)
+# In-memory video cache
 VIDEO_LIST = []
 
 CHANNELS_TO_MONITOR = [
@@ -21,19 +22,24 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: MASTER LINK EXTRACTOR (COOKIE POWERED) ---
+# --- API: MASTER LINK EXTRACTOR (WINDOWS PC VERSION) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
+    # Check if cookies file exists
+    if not os.path.exists(COOKIES_FILE):
+        return jsonify({"error": f"Cookies file NOT FOUND! Looking for: {COOKIES_FILE}"}), 500
+
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
         'format': 'best[ext=mp4]/best',
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        # Spoofing Android to bypass "Bot" detection
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+        # Windows Chrome User-Agent to match your PC cookies
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
         }
     }
     try:
@@ -42,7 +48,7 @@ def get_link(v_id):
             info = ydl.extract_info(url, download=False)
             return jsonify({"url": info['url'], "title": info['title']})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"YouTube Error: {str(e)}"}), 500
 
 @app.route("/api/videos", methods=["GET"])
 def get_videos():
@@ -82,7 +88,9 @@ def manual_subscribe():
     return "✅ Subscriptions Synced!"
 
 @app.route("/")
-def home(): return f"🎬 Hybrid Monitor Live! Cache: {len(VIDEO_LIST)}"
+def home():
+    file_status = "Found ✅" if os.path.exists(COOKIES_FILE) else "Missing ❌"
+    return f"🎬 Monitor Live! Cache: {len(VIDEO_LIST)} | Cookies: {file_status}"
 
 @app.route("/ping")
 def ping(): return "pong", 200

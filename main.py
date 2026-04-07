@@ -2,10 +2,6 @@ import os, requests, json, threading, time, yt_dlp
 import xml.etree.ElementTree as ET
 from flask import Flask, request, Response, jsonify
 
-# 👇 FFmpeg setup (Render ke liye professional tarika)
-from static_ffmpeg import add_paths
-add_paths() 
-
 app = Flask(__name__)
 
 # --- CONFIGURATION ---
@@ -16,7 +12,6 @@ RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
 COOKIES_FILE = "cookies.txt" 
 WEBHOOK_SECRET = "mysecret123"
 
-# In-memory storage (Free Tier ke liye best)
 VIDEO_LIST = []
 
 CHANNELS_TO_MONITOR = [
@@ -25,16 +20,17 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: MASTER LINK EXTRACTOR (FFMPEG POWERED) ---
+# --- API: DIRECT LINK EXTRACTOR (MUXED VERSION) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
     if not os.path.exists(COOKIES_FILE):
-        return jsonify({"error": "Cookies file missing on GitHub!"}), 500
+        return jsonify({"error": "Cookies file missing!"}), 500
 
-    # Format selection (Aapke bot code wala logic)
+    # 👇 Ye format YouTube se 720p ya 360p ki WO file nikalega jo pehle se MIX hai
+    # Isse FFmpeg ki zaroorat nahi padegi aur App turant download karegi
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
-        'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
+        'format': 'best[ext=mp4]/best', 
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
@@ -47,16 +43,25 @@ def get_link(v_id):
             url = f"https://www.youtube.com/watch?v={v_id}"
             info = ydl.extract_info(url, download=False)
             
-            # Link check karna
+            # YouTube direct URL dhoondhte hain
             video_url = info.get('url')
+            
             if not video_url:
-                # Agar video/audio alag hain toh formats list se direct link dhoondhte hain
+                # Agar main info mein nahi mila, toh formats ki list check karte hain
+                for f in info.get('formats', []):
+                    # Format 22 = 720p Muxed, Format 18 = 360p Muxed
+                    if f.get('format_id') == '22' or f.get('format_id') == '18':
+                        video_url = f.get('url')
+                        break
+            
+            if not video_url:
+                # Still not found? Take the first available format
                 video_url = info['formats'][0]['url']
 
             return jsonify({
                 "url": video_url, 
                 "title": info.get('title', 'video'),
-                "ext": info.get('ext', 'mp4')
+                "ext": 'mp4'
             })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -97,7 +102,7 @@ def manual_subscribe():
             "hub.callback": f"{RENDER_URL}/webhook", "hub.topic": topic,
             "hub.verify": "async", "hub.mode": "subscribe", "hub.lease_seconds": 432000, "hub.secret": WEBHOOK_SECRET
         })
-    return "✅ Subscriptions Synced!"
+    return "✅ Monitoring Synced!"
 
 @app.route("/")
 def home():

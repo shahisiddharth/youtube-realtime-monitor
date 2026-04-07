@@ -20,22 +20,27 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: THE ULTIMATE BYPASS EXTRACTOR (iOS + ANDROID HYBRID) ---
+# --- API: SMART LINK EXTRACTOR (PRO FALLBACK VERSION) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
     if not os.path.exists(COOKIES_FILE):
         return jsonify({"error": "Cookies file missing!"}), 500
 
-    # Best Bypass Options (iOS client is currently the most stable)
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        # 👇 Is logic se YouTube ko lagega ki request iPhone se aa rahi hai
-        'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
+        # ✅ FIX: Best muxed formats priority (18=360p, 22=720p)
+        'format': '18/22/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios', 'android', 'web'],
+                'skip': ['hls', 'dash']
+            }
+        },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+            'User-Agent': 'com.google.ios.youtube/19.29.1 CFNetwork/1474 Darwin/23.0.0',
         }
     }
     
@@ -43,29 +48,25 @@ def get_link(v_id):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             url = f"https://www.youtube.com/watch?v={v_id}"
             info = ydl.extract_info(url, download=False)
-            formats = info.get('formats', [])
             
-            final_url = None
-            
-            # Priority Search: Pehle best quality muxed dhoondho
-            # iOS client aksar best muxed formats (18, 22) deta hai
-            for f in reversed(formats):
-                # We need both Video and Audio in one file (Muxed)
-                if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url'):
-                    # Prefer MP4 if possible
-                    if f.get('ext') == 'mp4':
-                        final_url = f.get('url')
-                        break
-            
-            # Fallback: Agar MP4 nahi mila toh jo bhi best hai
+            # yt-dlp automatically picks the best URL based on 'format' string
+            final_url = info.get('url')
+
+            # Fallback Loop: Agar direct link nahi mila, toh formats scan karein
             if not final_url:
+                formats = info.get('formats', [])
                 for f in reversed(formats):
+                    # Check for combined video and audio (Muxed)
                     if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url'):
-                        final_url = f.get('url')
+                        final_url = f['url']
                         break
+                
+                # Ultimate Fallback: Just give any working URL
+                if not final_url and formats:
+                    final_url = formats[-1].get('url')
 
             if not final_url:
-                final_url = formats[0].get('url')
+                return jsonify({"error": "No working link found for this video."}), 500
 
             return jsonify({
                 "url": final_url, 
@@ -73,9 +74,9 @@ def get_link(v_id):
                 "ext": 'mp4'
             })
     except Exception as e:
-        return jsonify({"error": f"YouTube is blocking this IP. Try again in 5 mins. Details: {str(e)}"}), 500
+        return jsonify({"error": f"Extraction Error: {str(e)}"}), 500
 
-# --- REST OF THE ROUTES ---
+# --- ROUTES ---
 @app.route("/api/test_push/<v_id>")
 def test_push(v_id):
     video_obj = {"id": v_id, "title": f"TEST VIDEO: {v_id}"}
@@ -124,7 +125,7 @@ def manual_subscribe():
 @app.route("/")
 def home():
     c_status = "Found ✅" if os.path.exists(COOKIES_FILE) else "Missing ❌"
-    return f"🎬 Monitor Live! Cache: {len(VIDEO_LIST)} | Cookies: {c_status}"
+    return f"🎬 Hybrid Monitor Live! Cache: {len(VIDEO_LIST)} | Cookies: {c_status}"
 
 @app.route("/ping")
 def ping(): return "pong", 200

@@ -20,6 +20,22 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
+# --- UPDATE yt-dlp ENDPOINT ---
+@app.route("/api/update_ytdlp")
+def update_ytdlp():
+    import subprocess
+    result = subprocess.run(
+        ["pip", "install", "--upgrade", "yt-dlp"],
+        capture_output=True, text=True
+    )
+    import importlib
+    import yt_dlp
+    importlib.reload(yt_dlp)
+    return jsonify({
+        "stdout": result.stdout[-500:],
+        "version": yt_dlp.version.__version__
+    })
+
 # --- DEBUG ENDPOINT ---
 @app.route("/api/debug/<v_id>")
 def debug_formats(v_id):
@@ -70,7 +86,6 @@ def get_link(v_id):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             url = f"https://www.youtube.com/watch?v={v_id}"
             info = ydl.extract_info(url, download=False)
-
             final_url = info.get('url') or info.get('formats', [{}])[-1].get('url')
 
             if not final_url:

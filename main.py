@@ -20,27 +20,81 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- UPDATE yt-dlp ENDPOINT ---
-@app.route("/api/update_ytdlp")
-def update_ytdlp():
-    import subprocess
-    result = subprocess.run(
-        ["pip", "install", "--upgrade", "yt-dlp"],
-        capture_output=True, text=True
-    )
-    import importlib
-    import yt_dlp
-    importlib.reload(yt_dlp)
-    return jsonify({
-        "stdout": result.stdout[-500:],
-        "version": yt_dlp.version.__version__
-    })
+# --- CORE HELPER: Best Muxed URL Extractor (No FFmpeg needed) ---
+def extract_muxed_url(v_id):
+    """
+    Priority Chain (FFmpeg bilkul nahi chahiye):
+    1. Format 22 -> 720p MP4 muxed (video+audio ek file)
+    2. Format 18 -> 360p MP4 muxed (video+audio ek file)
+    3. Any muxed -> jo bhi mila video+audio saath
+    4. Last resort -> koi bhi pehla format
+    """
+    ydl_opts = {
+        'cookiefile': COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios', 'android', 'web'],
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'com.google.ios.youtube/19.29.1 CFNetwork/1474 Darwin/23.0.0',
+        }
+    }
 
-# --- DEBUG ENDPOINT ---
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(
+            f"https://www.youtube.com/watch?v={v_id}",
+            download=False
+        )
+
+    formats = info.get('formats', [])
+    title = info.get('title', 'video')
+
+    # Step 1: Format 22 dhoondo (720p muxed mp4)
+    for f in formats:
+        if f.get('format_id') == '22' and f.get('url'):
+            return f['url'], title, '720p'
+
+    # Step 2: Format 18 dhoondo (360p muxed mp4)
+    for f in formats:
+        if f.get('format_id') == '18' and f.get('url'):
+            return f['url'], title, '360p'
+
+    # Step 3: Koi bhi muxed format (video+audio dono saath)
+    for f in reversed(formats):
+        has_video = f.get('vcodec', 'none') != 'none'
+        has_audio = f.get('acodec', 'none') != 'none'
+        if has_video and has_audio and f.get('url'):
+            return f['url'], title, f.get('format_id', 'muxed')
+
+    # Step 4: Last resort
+    for f in formats:
+        if f.get('url'):
+            return f['url'], title, 'fallback'
+
+    return None, title, None
+
+# --- API: DOWNLOAD LINK ---
+@app.route("/api/get_link/<v_id>")
+def get_link(v_id):
+    if not os.path.exists(COOKIES_FILE):
+        return jsonify({"error": "Cookies file missing on server!"}), 500
+    try:
+        url, title, quality = extract_muxed_url(v_id)
+        if not url:
+            return jsonify({"error": "No downloadable format found."}), 500
+        return jsonify({"url": url, "title": title, "quality": quality, "ext": "mp4"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# --- DEBUG: List all formats ---
 @app.route("/api/debug/<v_id>")
 def debug_formats(v_id):
     ydl_opts = {
-        'cookiefile': COOKIES_FILE,
+        'cookiefile': COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
         'quiet': True,
         'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
     }
@@ -62,43 +116,13 @@ def debug_formats(v_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- API: DOWNLOAD LINK ---
-@app.route("/api/get_link/<v_id>")
-def get_link(v_id):
-    if not os.path.exists(COOKIES_FILE):
-        return jsonify({"error": "Cookies file missing!"}), 500
-
-    ydl_opts = {
-        'cookiefile': COOKIES_FILE,
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'format': 'best[ext=mp4]/best',
-        'extractor_args': {
-            'youtube': {'player_client': ['ios', 'android', 'web']}
-        },
-        'http_headers': {
-            'User-Agent': 'com.google.ios.youtube/19.29.1 CFNetwork/1474 Darwin/23.0.0',
-        }
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            url = f"https://www.youtube.com/watch?v={v_id}"
-            info = ydl.extract_info(url, download=False)
-            final_url = info.get('url') or info.get('formats', [{}])[-1].get('url')
-
-            if not final_url:
-                return jsonify({"error": "No URL found"}), 500
-
-            return jsonify({
-                "url": final_url,
-                "title": info.get('title', 'video'),
-                "ext": "mp4"
-            })
-
-    except Exception as e:
-        return jsonify({"error": f"Extraction Error: {str(e)}"}), 500
+# --- UPDATE yt-dlp ---
+@app.route("/api/update_ytdlp")
+def update_ytdlp():
+    import subprocess, importlib
+    result = subprocess.run(["pip", "install", "--upgrade", "yt-dlp"], capture_output=True, text=True)
+    importlib.reload(yt_dlp)
+    return jsonify({"stdout": result.stdout[-500:], "version": yt_dlp.version.__version__})
 
 # --- REST OF THE ROUTES ---
 @app.route("/api/test_push/<v_id>")
@@ -106,8 +130,8 @@ def test_push(v_id):
     video_obj = {"id": v_id, "title": f"TEST VIDEO: {v_id}"}
     if not any(v['id'] == v_id for v in VIDEO_LIST):
         VIDEO_LIST.insert(0, video_obj)
-        return f"✅ SUCCESS! Pushed {v_id}. Refresh App!"
-    return "❌ Already in list."
+        return f"SUCCESS! Pushed {v_id}. Refresh App!"
+    return "Already in list."
 
 @app.route("/api/videos", methods=["GET"])
 def get_videos():
@@ -133,7 +157,7 @@ def receive_webhook():
                     for cid in ALL_CHAT_IDS:
                         requests.post(
                             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                            json={"chat_id": cid, "text": f"🔔 *Naya Video Aaya!*\n\n🎬 {title}\n\nApp check karein!", "parse_mode": "Markdown"}
+                            json={"chat_id": cid, "text": f"Naya Video Aaya!\n\n{title}\n\nApp check karein!", "parse_mode": "Markdown"}
                         )
     except: pass
     return "OK", 200
@@ -147,12 +171,12 @@ def manual_subscribe():
             "hub.verify": "async", "hub.mode": "subscribe",
             "hub.lease_seconds": 432000, "hub.secret": WEBHOOK_SECRET
         })
-    return "✅ Subscriptions Synced!"
+    return "Subscriptions Synced!"
 
 @app.route("/")
 def home():
-    c_status = "Found ✅" if os.path.exists(COOKIES_FILE) else "Missing ❌"
-    return f"🎬 Monitor Live! Cache: {len(VIDEO_LIST)} | Cookies: {c_status}"
+    c_status = "Found" if os.path.exists(COOKIES_FILE) else "Missing"
+    return f"Monitor Live! Cache: {len(VIDEO_LIST)} | Cookies: {c_status}"
 
 @app.route("/ping")
 def ping(): return "pong", 200

@@ -20,16 +20,16 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: MASTER LINK EXTRACTOR (ULTIMATE VERSION) ---
+# --- API: SMART LINK EXTRACTOR (NO-ERROR VERSION) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
     if not os.path.exists(COOKIES_FILE):
-        return jsonify({"error": "Cookies file missing on server"}), 500
+        return jsonify({"error": "Cookies file missing on GitHub!"}), 500
 
+    # Smart Format Selector: Pehle 720p/360p (Muxed) dhoondhega, fir best single file
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
-        # 👇 Is baar humne format ko 'best' kar diya hai (Sabse best single file)
-        'format': 'best', 
+        'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
@@ -40,10 +40,20 @@ def get_link(v_id):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             url = f"https://www.youtube.com/watch?v={v_id}"
+            # Extract info without downloading
             info = ydl.extract_info(url, download=False)
-            # Direct link aur title bhejein
+            
+            # Agar muxed stream nahi mili toh format list se best dhoondhenge
+            video_url = info.get('url')
+            if not video_url and 'formats' in info:
+                # Find the best format that has both video and audio
+                for f in reversed(info['formats']):
+                    if f.get('vcodec') != 'none' and f.get('acodec') != 'none':
+                        video_url = f['url']
+                        break
+
             return jsonify({
-                "url": info['url'], 
+                "url": video_url, 
                 "title": info.get('title', 'video'),
                 "ext": info.get('ext', 'mp4')
             })

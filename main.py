@@ -20,16 +20,12 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: FAIL-SAFE LINK EXTRACTOR (NO FFMPEG NEEDED) ---
+# --- API: MANUAL LINK EXTRACTOR (FAIL-PROOF) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
-    if not os.path.exists(COOKIES_FILE):
-        return jsonify({"error": "Cookies file missing on GitHub!"}), 500
-
+    # Hum 'format' remove kar rahe hain taaki error na aaye
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
-        # Format string jo sirf wahi files dhundhega jo 'ready-to-play' hain
-        'format': 'best[ext=mp4]/best', 
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
@@ -41,53 +37,52 @@ def get_link(v_id):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             url = f"https://www.youtube.com/watch?v={v_id}"
             info = ydl.extract_info(url, download=False)
-            
-            # Logic to find the best MUXED (Video + Audio) format manually
             formats = info.get('formats', [])
-            video_url = None
             
-            # 1. Sabse pehle Format 22 (720p MP4 Muxed) dhoondhte hain
+            final_url = None
+            
+            # Logic: Dhoondho koi aisa format jisme Video aur Audio DONO hon
+            # Priority 1: 720p (ext mp4)
             for f in formats:
-                if f.get('format_id') == '22':
-                    video_url = f.get('url')
+                if f.get('height') == 720 and f.get('vcodec') != 'none' and f.get('acodec') != 'none':
+                    final_url = f.get('url')
                     break
             
-            # 2. Agar nahi mila toh Format 18 (360p MP4 Muxed) dhoondhte hain
-            if not video_url:
+            # Priority 2: 360p (ext mp4)
+            if not final_url:
                 for f in formats:
-                    if f.get('format_id') == '18':
-                        video_url = f.get('url')
+                    if f.get('height') == 360 and f.get('vcodec') != 'none' and f.get('acodec') != 'none':
+                        final_url = f.get('url')
                         break
             
-            # 3. Agar ab bhi nahi mila toh list mein se koi bhi format jisme v+a dono ho
-            if not video_url:
-                for f in reversed(formats): # Reversed taaki best quality mile
+            # Priority 3: Koi bhi format jisme audio+video ho
+            if not final_url:
+                for f in reversed(formats): # Ulta check karein taaki best quality mile
                     if f.get('vcodec') != 'none' and f.get('acodec') != 'none':
-                        video_url = f.get('url')
+                        final_url = f.get('url')
                         break
             
-            # 4. Aakhri raasta: Jo bhi link yt-dlp ne nikala hai
-            if not video_url:
-                video_url = info.get('url') or formats[0]['url']
+            # Aakhri koshish: Pehla working link
+            if not final_url:
+                final_url = formats[0].get('url')
 
             return jsonify({
-                "url": video_url, 
+                "url": final_url, 
                 "title": info.get('title', 'video'),
                 "ext": 'mp4'
             })
     except Exception as e:
         return jsonify({"error": f"Extraction Error: {str(e)}"}), 500
 
-# --- SECRET TESTING ROUTE ---
+# --- REST OF THE CODE ---
 @app.route("/api/test_push/<v_id>")
 def test_push(v_id):
     video_obj = {"id": v_id, "title": f"TEST VIDEO: {v_id}"}
     if not any(v['id'] == v_id for v in VIDEO_LIST):
         VIDEO_LIST.insert(0, video_obj)
-        return f"✅ SUCCESS! {v_id} pushed. Refresh App!"
+        return f"✅ SUCCESS! Pushed {v_id}. Refresh App!"
     return "❌ Already in list."
 
-# --- MAIN ROUTES ---
 @app.route("/api/videos", methods=["GET"])
 def get_videos():
     return jsonify(VIDEO_LIST)
@@ -123,7 +118,7 @@ def manual_subscribe():
             "hub.callback": f"{RENDER_URL}/webhook", "hub.topic": topic,
             "hub.verify": "async", "hub.mode": "subscribe", "hub.lease_seconds": 432000, "hub.secret": WEBHOOK_SECRET
         })
-    return "✅ Monitoring Synced!"
+    return "✅ Subscriptions Synced!"
 
 @app.route("/")
 def home():

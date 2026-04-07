@@ -20,17 +20,22 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- API: MANUAL LINK EXTRACTOR (FAIL-PROOF) ---
+# --- API: ANDROID PLAYER SPOOFER (ULTIMATE BYPASS) ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
-    # Hum 'format' remove kar rahe hain taaki error na aaye
+    if not os.path.exists(COOKIES_FILE):
+        return jsonify({"error": "Cookies file missing!"}), 500
+
+    # 🛑 FORMAT KO OPTION SE HATAYE (Exception se bachne ke liye)
     ydl_opts = {
         'cookiefile': COOKIES_FILE,
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
+        # 👇 Sabse zaroori: YouTube ko lagna chahiye ki ye Android App hai
+        'extractor_args': {'youtube': {'player_client': ['android']}},
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'User-Agent': 'com.google.android.youtube/19.10.34 (Linux; U; Android 11; en_US) gzip',
         }
     }
     try:
@@ -41,30 +46,26 @@ def get_link(v_id):
             
             final_url = None
             
-            # Logic: Dhoondho koi aisa format jisme Video aur Audio DONO hon
-            # Priority 1: 720p (ext mp4)
-            for f in formats:
-                if f.get('height') == 720 and f.get('vcodec') != 'none' and f.get('acodec') != 'none':
-                    final_url = f.get('url')
-                    break
+            # Logic: Pehle "Muxed" (Video+Audio) MP4 dhoondho jo Mobile par chalta hai
+            # Format 22 = 720p, Format 18 = 360p
+            target_formats = ['22', '18', '135', '134'] 
             
-            # Priority 2: 360p (ext mp4)
-            if not final_url:
+            for f_id in target_formats:
                 for f in formats:
-                    if f.get('height') == 360 and f.get('vcodec') != 'none' and f.get('acodec') != 'none':
+                    if f.get('format_id') == f_id and f.get('url'):
+                        final_url = f.get('url')
+                        break
+                if final_url: break
+            
+            # Agar ab bhi nahi mila, toh manually check karein ki kaunsa best hai jisme audio+video ho
+            if not final_url:
+                for f in reversed(formats):
+                    if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url'):
                         final_url = f.get('url')
                         break
             
-            # Priority 3: Koi bhi format jisme audio+video ho
             if not final_url:
-                for f in reversed(formats): # Ulta check karein taaki best quality mile
-                    if f.get('vcodec') != 'none' and f.get('acodec') != 'none':
-                        final_url = f.get('url')
-                        break
-            
-            # Aakhri koshish: Pehla working link
-            if not final_url:
-                final_url = formats[0].get('url')
+                final_url = formats[0].get('url') # Pehla available link
 
             return jsonify({
                 "url": final_url, 
@@ -74,7 +75,7 @@ def get_link(v_id):
     except Exception as e:
         return jsonify({"error": f"Extraction Error: {str(e)}"}), 500
 
-# --- REST OF THE CODE ---
+# --- ROUTES ---
 @app.route("/api/test_push/<v_id>")
 def test_push(v_id):
     video_obj = {"id": v_id, "title": f"TEST VIDEO: {v_id}"}

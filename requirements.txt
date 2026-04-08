@@ -1,4 +1,4 @@
 flask
 requests
 gunicorn
-yt-dlp==2024.12.13
+yt-dlp==2025.1.26

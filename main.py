@@ -1,17 +1,15 @@
-import os, requests, json, threading, time, yt_dlp
+import os, requests, threading, time, yt_dlp
 import xml.etree.ElementTree as ET
 from flask import Flask, request, Response, jsonify
 
 app = Flask(__name__)
 
-# --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ALL_CHAT_IDS = [TELEGRAM_CHAT_ID, "1420941229"]
 RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
 COOKIES_FILE = "cookies.txt"
 WEBHOOK_SECRET = "mysecret123"
-
 VIDEO_LIST = []
 
 CHANNELS_TO_MONITOR = [
@@ -20,111 +18,92 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-# --- CORE HELPER: Best Muxed URL Extractor (No FFmpeg needed) ---
-def extract_muxed_url(v_id):
+def get_all_muxed_formats(v_id):
     """
-    Priority Chain (FFmpeg bilkul nahi chahiye):
-    1. Format 22 -> 720p MP4 muxed (video+audio ek file)
-    2. Format 18 -> 360p MP4 muxed (video+audio ek file)
-    3. Any muxed -> jo bhi mila video+audio saath
-    4. Last resort -> koi bhi pehla format
+    Sirf muxed formats return karta hai - NO ffmpeg needed.
+    Format 22 = 720p mp4, Format 18 = 360p mp4
     """
     ydl_opts = {
         'cookiefile': COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'android', 'web'],
-            }
-        },
+        # KEY FIX: format specify mat karo, sab formats lo manually
+        'format': 'best',
+        'extractor_args': {'youtube': {'player_client': ['ios', 'web']}},
         'http_headers': {
-            'User-Agent': 'com.google.ios.youtube/19.29.1 CFNetwork/1474 Darwin/23.0.0',
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
         }
     }
-
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(
-            f"https://www.youtube.com/watch?v={v_id}",
-            download=False
-        )
+        info = ydl.extract_info(f"https://www.youtube.com/watch?v={v_id}", download=False)
 
-    formats = info.get('formats', [])
     title = info.get('title', 'video')
+    formats = info.get('formats', [])
 
-    # Step 1: Format 22 dhoondo (720p muxed mp4)
+    # Sirf muxed formats (video+audio dono ek file mein)
+    muxed = []
     for f in formats:
-        if f.get('format_id') == '22' and f.get('url'):
-            return f['url'], title, '720p'
+        has_v = f.get('vcodec', 'none') not in ('none', None)
+        has_a = f.get('acodec', 'none') not in ('none', None)
+        url = f.get('url')
+        if has_v and has_a and url:
+            muxed.append({
+                'format_id': f.get('format_id'),
+                'ext': f.get('ext', 'mp4'),
+                'height': f.get('height', 0) or 0,
+                'url': url,
+                'label': f"{f.get('height', '?')}p {f.get('ext','mp4').upper()}"
+            })
 
-    # Step 2: Format 18 dhoondo (360p muxed mp4)
-    for f in formats:
-        if f.get('format_id') == '18' and f.get('url'):
-            return f['url'], title, '360p'
+    # Height ke hisab se sort karo (highest first)
+    muxed.sort(key=lambda x: x['height'], reverse=True)
+    return title, muxed
 
-    # Step 3: Koi bhi muxed format (video+audio dono saath)
-    for f in reversed(formats):
-        has_video = f.get('vcodec', 'none') != 'none'
-        has_audio = f.get('acodec', 'none') != 'none'
-        if has_video and has_audio and f.get('url'):
-            return f['url'], title, f.get('format_id', 'muxed')
 
-    # Step 4: Last resort
-    for f in formats:
-        if f.get('url'):
-            return f['url'], title, 'fallback'
-
-    return None, title, None
-
-# --- API: DOWNLOAD LINK ---
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
-    if not os.path.exists(COOKIES_FILE):
-        return jsonify({"error": "Cookies file missing on server!"}), 500
+    """Default: best available muxed format"""
+    quality = request.args.get('quality', 'best')  # ?quality=720 ya ?quality=360
     try:
-        url, title, quality = extract_muxed_url(v_id)
-        if not url:
-            return jsonify({"error": "No downloadable format found."}), 500
-        return jsonify({"url": url, "title": title, "quality": quality, "ext": "mp4"})
+        title, muxed = get_all_muxed_formats(v_id)
+        if not muxed:
+            return jsonify({"error": "Koi bhi downloadable format nahi mila!"}), 500
+
+        chosen = muxed[0]  # default: best (highest)
+
+        if quality == '720':
+            for f in muxed:
+                if f['height'] == 720: chosen = f; break
+        elif quality == '360':
+            for f in muxed:
+                if f['height'] == 360: chosen = f; break
+        elif quality == 'worst':
+            chosen = muxed[-1]
+
+        return jsonify({
+            "url": chosen['url'],
+            "title": title,
+            "quality": chosen['label'],
+            "ext": chosen['ext']
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- DEBUG: List all formats ---
-@app.route("/api/debug/<v_id>")
-def debug_formats(v_id):
-    ydl_opts = {
-        'cookiefile': COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
-        'quiet': True,
-        'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
-    }
+
+@app.route("/api/formats/<v_id>")
+def get_formats(v_id):
+    """Sabhi available muxed formats return karo"""
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={v_id}", download=False)
-            formats = info.get('formats', [])
-            result = []
-            for f in formats:
-                result.append({
-                    "format_id": f.get('format_id'),
-                    "ext": f.get('ext'),
-                    "vcodec": f.get('vcodec'),
-                    "acodec": f.get('acodec'),
-                    "height": f.get('height'),
-                    "has_url": bool(f.get('url'))
-                })
-            return jsonify({"total": len(result), "formats": result})
+        title, muxed = get_all_muxed_formats(v_id)
+        return jsonify({
+            "title": title,
+            "formats": [{"label": f['label'], "height": f['height'], "format_id": f['format_id']} for f in muxed]
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --- UPDATE yt-dlp ---
-@app.route("/api/update_ytdlp")
-def update_ytdlp():
-    import subprocess, importlib
-    result = subprocess.run(["pip", "install", "--upgrade", "yt-dlp"], capture_output=True, text=True)
-    importlib.reload(yt_dlp)
-    return jsonify({"stdout": result.stdout[-500:], "version": yt_dlp.version.__version__})
 
-# --- REST OF THE ROUTES ---
 @app.route("/api/test_push/<v_id>")
 def test_push(v_id):
     video_obj = {"id": v_id, "title": f"TEST VIDEO: {v_id}"}
@@ -157,7 +136,7 @@ def receive_webhook():
                     for cid in ALL_CHAT_IDS:
                         requests.post(
                             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                            json={"chat_id": cid, "text": f"Naya Video Aaya!\n\n{title}\n\nApp check karein!", "parse_mode": "Markdown"}
+                            json={"chat_id": cid, "text": f"🔔 *Naya Video!*\n\n🎬 {title}\n\nApp check karo!", "parse_mode": "Markdown"}
                         )
     except: pass
     return "OK", 200

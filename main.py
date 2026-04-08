@@ -1,6 +1,8 @@
-import os, requests, threading, time, yt_dlp
+import os, requests, threading, time
 import xml.etree.ElementTree as ET
 from flask import Flask, request, Response, jsonify
+from pytubefix import YouTube
+from pytubefix.cli import on_progress
 
 app = Flask(__name__)
 
@@ -8,7 +10,6 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ALL_CHAT_IDS = [TELEGRAM_CHAT_ID, "1420941229"]
 RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
-COOKIES_FILE = "cookies.txt"
 WEBHOOK_SECRET = "mysecret123"
 VIDEO_LIST = []
 
@@ -18,87 +19,66 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-def get_all_muxed_formats(v_id):
+
+def get_yt_streams(v_id):
     """
-    Sirf muxed formats return karta hai - NO ffmpeg needed.
-    Format 22 = 720p mp4, Format 18 = 360p mp4
+    pytubefix se progressive (muxed) streams lo.
+    Progressive = video+audio ek hi file — NO ffmpeg needed!
     """
-    ydl_opts = {
-        'cookiefile': COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        # KEY FIX: format specify mat karo, sab formats lo manually
-        'format': 'best',
-        'extractor_args': {'youtube': {'player_client': ['ios', 'web']}},
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
-        }
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"https://www.youtube.com/watch?v={v_id}", download=False)
-
-    title = info.get('title', 'video')
-    formats = info.get('formats', [])
-
-    # Sirf muxed formats (video+audio dono ek file mein)
-    muxed = []
-    for f in formats:
-        has_v = f.get('vcodec', 'none') not in ('none', None)
-        has_a = f.get('acodec', 'none') not in ('none', None)
-        url = f.get('url')
-        if has_v and has_a and url:
-            muxed.append({
-                'format_id': f.get('format_id'),
-                'ext': f.get('ext', 'mp4'),
-                'height': f.get('height', 0) or 0,
-                'url': url,
-                'label': f"{f.get('height', '?')}p {f.get('ext','mp4').upper()}"
-            })
-
-    # Height ke hisab se sort karo (highest first)
-    muxed.sort(key=lambda x: x['height'], reverse=True)
-    return title, muxed
-
-
-@app.route("/api/get_link/<v_id>")
-def get_link(v_id):
-    """Default: best available muxed format"""
-    quality = request.args.get('quality', 'best')  # ?quality=720 ya ?quality=360
-    try:
-        title, muxed = get_all_muxed_formats(v_id)
-        if not muxed:
-            return jsonify({"error": "Koi bhi downloadable format nahi mila!"}), 500
-
-        chosen = muxed[0]  # default: best (highest)
-
-        if quality == '720':
-            for f in muxed:
-                if f['height'] == 720: chosen = f; break
-        elif quality == '360':
-            for f in muxed:
-                if f['height'] == 360: chosen = f; break
-        elif quality == 'worst':
-            chosen = muxed[-1]
-
-        return jsonify({
-            "url": chosen['url'],
-            "title": title,
-            "quality": chosen['label'],
-            "ext": chosen['ext']
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    yt = YouTube(
+        f"https://www.youtube.com/watch?v={v_id}",
+        use_oauth=False,
+        allow_oauth_cache=False,
+        use_po_token=False,
+    )
+    # Progressive streams = muxed (720p ya 360p mp4)
+    streams = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc()
+    return yt.title, streams
 
 
 @app.route("/api/formats/<v_id>")
 def get_formats(v_id):
     """Sabhi available muxed formats return karo"""
     try:
-        title, muxed = get_all_muxed_formats(v_id)
+        title, streams = get_yt_streams(v_id)
+        formats = []
+        for s in streams:
+            formats.append({
+                "itag": s.itag,
+                "label": s.resolution or "unknown",
+                "height": int(s.resolution.replace('p','')) if s.resolution else 0,
+                "mime_type": s.mime_type,
+                "url": s.url
+            })
+        return jsonify({"title": title, "formats": formats})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/get_link/<v_id>")
+def get_link(v_id):
+    """Best ya selected quality ka direct URL do"""
+    quality = request.args.get('quality', 'best')
+    try:
+        title, streams = get_yt_streams(v_id)
+        stream_list = list(streams)
+
+        if not stream_list:
+            return jsonify({"error": "Koi bhi stream nahi mila!"}), 500
+
+        chosen = stream_list[0]  # default: best (highest resolution first)
+
+        if quality != 'best':
+            for s in stream_list:
+                if s.resolution == f"{quality}p":
+                    chosen = s
+                    break
+
         return jsonify({
+            "url": chosen.url,
             "title": title,
-            "formats": [{"label": f['label'], "height": f['height'], "format_id": f['format_id']} for f in muxed]
+            "quality": chosen.resolution,
+            "ext": "mp4"
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -154,8 +134,7 @@ def manual_subscribe():
 
 @app.route("/")
 def home():
-    c_status = "Found" if os.path.exists(COOKIES_FILE) else "Missing"
-    return f"Monitor Live! Cache: {len(VIDEO_LIST)} | Cookies: {c_status}"
+    return f"Monitor Live! Cache: {len(VIDEO_LIST)} videos"
 
 @app.route("/ping")
 def ping(): return "pong", 200

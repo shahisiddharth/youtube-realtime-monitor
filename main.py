@@ -1,8 +1,6 @@
 import os, requests, threading, time
 import xml.etree.ElementTree as ET
 from flask import Flask, request, Response, jsonify
-from pytubefix import YouTube
-from pytubefix.cli import on_progress
 
 app = Flask(__name__)
 
@@ -19,69 +17,68 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
+COBALT_API = "https://api.cobalt.tools/"
 
-def get_yt_streams(v_id):
+def cobalt_get_link(v_id, quality="720"):
     """
-    pytubefix se progressive (muxed) streams lo.
-    Progressive = video+audio ek hi file — NO ffmpeg needed!
+    Cobalt.tools API se direct download URL lo.
+    - Free, no API key, no bot detection
+    - YouTube, Twitter, Instagram sab support karta hai
     """
-    yt = YouTube(
-        f"https://www.youtube.com/watch?v={v_id}",
-        use_oauth=False,
-        allow_oauth_cache=False,
-        use_po_token=False,
-    )
-    # Progressive streams = muxed (720p ya 360p mp4)
-    streams = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc()
-    return yt.title, streams
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "url": f"https://www.youtube.com/watch?v={v_id}",
+        "videoQuality": quality,
+        "filenameStyle": "basic",
+        "downloadMode": "auto",
+    }
+    resp = requests.post(COBALT_API, json=payload, headers=headers, timeout=30)
+    data = resp.json()
 
+    status = data.get("status")
 
-@app.route("/api/formats/<v_id>")
-def get_formats(v_id):
-    """Sabhi available muxed formats return karo"""
-    try:
-        title, streams = get_yt_streams(v_id)
-        formats = []
-        for s in streams:
-            formats.append({
-                "itag": s.itag,
-                "label": s.resolution or "unknown",
-                "height": int(s.resolution.replace('p','')) if s.resolution else 0,
-                "mime_type": s.mime_type,
-                "url": s.url
-            })
-        return jsonify({"title": title, "formats": formats})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    if status == "tunnel" or status == "redirect":
+        return data.get("url"), quality + "p"
+    elif status == "picker":
+        # Multiple streams available — pehla lo
+        items = data.get("picker", [])
+        if items:
+            return items[0].get("url"), quality + "p"
+
+    raise Exception(f"Cobalt error: {data.get('error', {}).get('code', str(data))}")
 
 
 @app.route("/api/get_link/<v_id>")
 def get_link(v_id):
-    """Best ya selected quality ka direct URL do"""
-    quality = request.args.get('quality', 'best')
+    quality = request.args.get('quality', '720')
     try:
-        title, streams = get_yt_streams(v_id)
-        stream_list = list(streams)
-
-        if not stream_list:
-            return jsonify({"error": "Koi bhi stream nahi mila!"}), 500
-
-        chosen = stream_list[0]  # default: best (highest resolution first)
-
-        if quality != 'best':
-            for s in stream_list:
-                if s.resolution == f"{quality}p":
-                    chosen = s
-                    break
-
-        return jsonify({
-            "url": chosen.url,
-            "title": title,
-            "quality": chosen.resolution,
-            "ext": "mp4"
-        })
+        url, label = cobalt_get_link(v_id, quality)
+        if not url:
+            return jsonify({"error": "URL nahi mila"}), 500
+        return jsonify({"url": url, "title": v_id, "quality": label, "ext": "mp4"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Fallback: 360p try karo
+        try:
+            url, label = cobalt_get_link(v_id, "360")
+            return jsonify({"url": url, "title": v_id, "quality": label, "ext": "mp4"})
+        except Exception as e2:
+            return jsonify({"error": str(e2)}), 500
+
+
+@app.route("/api/formats/<v_id>")
+def get_formats(v_id):
+    """Quality options — Cobalt 3 qualities support karta hai"""
+    return jsonify({
+        "title": v_id,
+        "formats": [
+            {"label": "1080p MP4", "height": 1080},
+            {"label": "720p MP4",  "height": 720},
+            {"label": "360p MP4",  "height": 360},
+        ]
+    })
 
 
 @app.route("/api/test_push/<v_id>")
@@ -134,7 +131,7 @@ def manual_subscribe():
 
 @app.route("/")
 def home():
-    return f"Monitor Live! Cache: {len(VIDEO_LIST)} videos"
+    return f"Monitor Live! Cache: {len(VIDEO_LIST)} videos | Powered by Cobalt API"
 
 @app.route("/ping")
 def ping(): return "pong", 200

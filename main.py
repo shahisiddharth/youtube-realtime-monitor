@@ -9,6 +9,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ALL_CHAT_IDS = [TELEGRAM_CHAT_ID, "1420941229"]
 RENDER_URL = "https://youtube-realtime-monitor-1.onrender.com"
 WEBHOOK_SECRET = "mysecret123"
+COOKIES_FILE = "cookies.txt"
 VIDEO_LIST = []
 
 CHANNELS_TO_MONITOR = [
@@ -17,69 +18,36 @@ CHANNELS_TO_MONITOR = [
 ]
 KEYWORDS = ["hindi dubbed", "hindi dub", "korean", "kdrama", "k-drama", "korean movie", "netflix", "hindi"]
 
-COBALT_API = "https://api.cobalt.tools/"
-
-def cobalt_get_link(v_id, quality="720"):
-    """
-    Cobalt.tools API se direct download URL lo.
-    - Free, no API key, no bot detection
-    - YouTube, Twitter, Instagram sab support karta hai
-    """
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "url": f"https://www.youtube.com/watch?v={v_id}",
-        "videoQuality": quality,
-        "filenameStyle": "basic",
-        "downloadMode": "auto",
-    }
-    resp = requests.post(COBALT_API, json=payload, headers=headers, timeout=30)
-    data = resp.json()
-
-    status = data.get("status")
-
-    if status == "tunnel" or status == "redirect":
-        return data.get("url"), quality + "p"
-    elif status == "picker":
-        # Multiple streams available — pehla lo
-        items = data.get("picker", [])
-        if items:
-            return items[0].get("url"), quality + "p"
-
-    raise Exception(f"Cobalt error: {data.get('error', {}).get('code', str(data))}")
-
-
-@app.route("/api/get_link/<v_id>")
-def get_link(v_id):
-    quality = request.args.get('quality', '720')
+def parse_cookies_txt(filepath):
+    """Netscape cookies.txt -> dict"""
+    cookies = {}
     try:
-        url, label = cobalt_get_link(v_id, quality)
-        if not url:
-            return jsonify({"error": "URL nahi mila"}), 500
-        return jsonify({"url": url, "title": v_id, "quality": label, "ext": "mp4"})
-    except Exception as e:
-        # Fallback: 360p try karo
-        try:
-            url, label = cobalt_get_link(v_id, "360")
-            return jsonify({"url": url, "title": v_id, "quality": label, "ext": "mp4"})
-        except Exception as e2:
-            return jsonify({"error": str(e2)}), 500
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split('\t')
+                if len(parts) >= 7:
+                    cookies[parts[5]] = parts[6]
+    except:
+        pass
+    return cookies
 
+def cookies_to_header_string(filepath):
+    """Cookies dict -> 'name=value; name2=value2' string"""
+    cookies = parse_cookies_txt(filepath)
+    return '; '.join(f"{k}={v}" for k, v in cookies.items())
 
-@app.route("/api/formats/<v_id>")
-def get_formats(v_id):
-    """Quality options — Cobalt 3 qualities support karta hai"""
-    return jsonify({
-        "title": v_id,
-        "formats": [
-            {"label": "1080p MP4", "height": 1080},
-            {"label": "720p MP4",  "height": 720},
-            {"label": "360p MP4",  "height": 360},
-        ]
-    })
-
+@app.route("/api/cookies")
+def get_cookies():
+    """Flutter app ke liye cookie string return karo"""
+    if not os.path.exists(COOKIES_FILE):
+        return jsonify({"error": "Cookies file missing!"}), 500
+    cookie_str = cookies_to_header_string(COOKIES_FILE)
+    if not cookie_str:
+        return jsonify({"error": "Cookies empty!"}), 500
+    return jsonify({"cookies": cookie_str})
 
 @app.route("/api/test_push/<v_id>")
 def test_push(v_id):
@@ -131,7 +99,8 @@ def manual_subscribe():
 
 @app.route("/")
 def home():
-    return f"Monitor Live! Cache: {len(VIDEO_LIST)} videos | Powered by Cobalt API"
+    c_status = "Found ✅" if os.path.exists(COOKIES_FILE) else "Missing ❌"
+    return f"Monitor Live! Cache: {len(VIDEO_LIST)} | Cookies: {c_status}"
 
 @app.route("/ping")
 def ping(): return "pong", 200
